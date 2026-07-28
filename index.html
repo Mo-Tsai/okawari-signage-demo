@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>OKAWARI 門頭屏模擬器 v0.2</title>
+<title>OKAWARI 門頭屏模擬器 v0.3</title>
 <style>
   *{box-sizing:border-box}
   body{background:#0d0b12;color:#d8d3e0;font-family:"Microsoft JhengHei",sans-serif;
@@ -32,7 +32,7 @@
 </style>
 </head>
 <body>
-<h1><b>OKAWARI QUEST</b>｜門頭屏模擬器 v0.2</h1>
+<h1><b>OKAWARI QUEST</b>｜門頭屏模擬器 v0.3</h1>
 <div id="meta"></div>
 <div id="frame"><canvas id="led"></canvas></div>
 <div id="ui">
@@ -44,24 +44,17 @@
     <option value="4">P4（4m 觀看）</option>
     <option value="5">P5（美食街走道距離）</option>
   </select>
-  <select id="eggRate" onchange="CONFIG.eggChance=parseFloat(this.value)">
-    <option value="0.1">彩蛋機率 10%</option>
-    <option value="0.25" selected>彩蛋機率 25%（預設）</option>
-    <option value="0.5">彩蛋機率 50%</option>
-    <option value="1">彩蛋機率 100%（展示用）</option>
-  </select>
 </div>
 <div id="log">idle：紅→黃 像素漸變跑動中；續碗請按「＋」，點幾碗按幾次</div>
 
 <script>
 /* ================= 基本參數 ================= */
-const COLS=128, ROWS=32;          // 規格鎖定：純長條單一連續屏（方屏已移除）
-const CELL=7, GAP=2;              // 螢幕上每顆 LED 的大小與間距
+const COLS=128, ROWS=32;          // 規格鎖定：純長條單一連續屏
+const CELL=7, GAP=2;
 const cv=document.getElementById('led'), ctx=cv.getContext('2d');
 
-/* ===== 業主可調參數 ===== */
+/* ===== 可調參數 ===== */
 const CONFIG={
-  eggChance: 0.25,   // 續碗彩蛋機率（0~1，之後開放業主後台設定）
   patrolMinSec: 18,  // 待機巡邏最短間隔（秒）
   patrolMaxSec: 40   // 待機巡邏最長間隔（秒）
 };
@@ -81,16 +74,23 @@ const SPC={K:[26,23,33],W:[255,253,246],R:RED,O:ORG};
 const mirror=spr=>spr.map(r=>[...r].reverse().join(''));
 const SPR_A_L=mirror(SPR_A), SPR_B_L=mirror(SPR_B);
 
-/* ================= 彩蛋（蛋形 6×7） ================= */
-const EGG=[
-"..WW..",
-".WYYW.",
-"WYYYYW",
-"WYYYYW",
-"WYWWYW",
-".WYYW.",
-"..WW.."];
-const EGGC={W:[255,253,246],Y:YEL};
+/* ================= 劍（相對勇者 12×12 原點的 cell 座標） ================= */
+const STEEL=[214,218,228];
+/* 平舉：護手+水平劍身往前伸 */
+const SWORD_READY=[[11,6,'G'],[12,6,'S'],[13,6,'S'],[14,6,'S'],[15,6,'S'],[16,6,'S']];
+/* 斜劈：往前下砍 */
+const SWORD_SLASH=[[11,7,'G'],[12,8,'S'],[13,9,'S'],[14,10,'S'],[15,11,'S']];
+const SWC={S:STEEL,G:YEL};
+
+/* ================= 石頭 sprite（8×6） ================= */
+const STONE=[
+"..SSSS..",
+".SSSSDS.",
+"SSWSSSDS",
+"SSSSDSSS",
+".SDSSSS.",
+"..SSSS.."];
+const STC={S:[148,150,160],D:[92,94,104],W:[205,208,218]};
 
 /* ================= 像素文字（離屏 canvas 轉點陣，支援日文） ================= */
 function textGrid(str,px){
@@ -105,7 +105,6 @@ function textGrid(str,px){
   for(let y=0;y<h;y++){const row=[];for(let x=0;x<w;x++)row.push(d[(y*w+x)*4+3]>110?1:0);g.push(row);}
   return g;
 }
-/* 自動縮字：超過畫面寬就降 px 重轉 */
 function fitTextGrid(str,px){
   let g=textGrid(str,px);
   while(g[0].length>COLS-4 && px>6){ px--; g=textGrid(str,px); }
@@ -115,8 +114,8 @@ const TXT_EGG=fitTextGrid('おかわり おめでとう!',10);
 
 /* ================= 狀態 ================= */
 let off=0, frame=0;
-let runners=[];            // 續碗勇者隊伍 {x,t,egg,eggX,state:'run'|'burst',burstT}
-let patrol=null;           // 巡邏勇者 {x,dir,t}
+let runners=[];            // 續碗勇者 {x,t,stoneX,state:'run'|'strike'|'burst',aT,debris}
+let patrol=null;
 let patrolNext=0;
 let lastHour=new Date().getHours();
 
@@ -137,15 +136,14 @@ function log(m){ document.getElementById('log').textContent=m; }
 
 /* ================= 事件 ================= */
 function okawari(){
-  const egg=Math.random()<CONFIG.eggChance;
-  /* 一批一批排隊：新勇者從最後一隻的後方出發 */
-  let startX=-14;
+  /* 每一次續碗都有一顆石頭等著被破 */
+  let startX=-16;
   if(runners.length){
     const last=runners[runners.length-1];
-    startX=Math.min(-14,last.x-20);
+    startX=Math.min(-16,last.x-22);
   }
-  const eggX=egg?Math.round(COLS*(0.35+Math.random()*0.35)):0;
-  runners.push({x:startX,t:0,egg,eggX,state:'run',burstT:0});
+  const stoneX=Math.round(COLS*(0.38+Math.random()*0.3));
+  runners.push({x:startX,t:0,stoneX,state:'run',aT:0,debris:null});
   log(`OKAWARI +1 ── 勇者出發！（隊伍 ${runners.length} 隻）`);
 }
 function triggerPatrol(){
@@ -166,12 +164,12 @@ function dot(x,y,c){
   ctx.beginPath(); ctx.arc(px+CELL/2,py+CELL/2,CELL/2,0,7); ctx.fill();
 }
 
-/* ================= 漸變底色（紅→黃 來回循環＋抖動顆粒） ================= */
+/* ================= 漸變底色 ================= */
 function gradientAt(x,y,dim){
   const PERIOD=COLS*1.6;
   let pos=((x+off)%PERIOD)/PERIOD;
-  let t=pos<0.5?pos*2:(1-pos)*2;                     // 三角波：紅→黃→紅 無縫循環
-  t+=(((x*7+y*13)%17)/17-0.5)*0.22;                  // ordered dither 顆粒
+  let t=pos<0.5?pos*2:(1-pos)*2;
+  t+=(((x*7+y*13)%17)/17-0.5)*0.22;
   t=Math.max(0,Math.min(1,t));
   let c=t<0.5?lerp(RED,ORG,t*2):lerp(ORG,YEL,(t-0.5)*2);
   if(dim) c=c.map(v=>v*0.22);
@@ -188,13 +186,20 @@ function drawSprite(spr,ox,oy,scale,pal){
       if(x>=0&&x<COLS&&y>=0&&y<ROWS) dot(x,y,P[ch]);
     }});});
 }
+function drawCells(cells,ox,oy,scale,dir){
+  cells.forEach(([cx,cy,ch])=>{
+    const sx=dir<0?(11-cx):cx;
+    for(let dy=0;dy<scale;dy++)for(let dx=0;dx<scale;dx++){
+      const x=ox+sx*scale+dx, y=oy+cy*scale+dy;
+      if(x>=0&&x<COLS&&y>=0&&y<ROWS) dot(x,y,SWC[ch]);
+    }});
+}
 function drawText(g,ox,oy,color){
   g.forEach((row,y)=>row.forEach((v,x)=>{
     const X=ox+x,Y=oy+y;
     if(v&&X>=0&&X<COLS&&Y>=0&&Y<ROWS) dot(X,Y,color);
   }));
 }
-/* 嘣！爆裂星芒（菱形擴散環） */
 function drawBurst(cx,cy,r,color){
   const n=Math.max(8,r*3);
   for(let i=0;i<n;i++){
@@ -205,7 +210,8 @@ function drawBurst(cx,cy,r,color){
 }
 
 /* ================= 主迴圈 ================= */
-const SCALE=2, SH=12*SCALE;       // 勇者顯示尺寸（長條屏固定 2 倍）
+const SCALE=2, SH=12*SCALE;
+const STONE_W=8*SCALE, STONE_H=6*SCALE;
 function tick(){
   frame++;
   ctx.fillStyle='#0d0b12'; ctx.fillRect(0,0,cv.width,cv.height);
@@ -214,48 +220,75 @@ function tick(){
   off+=busy?0.25:0.6;
   for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++) dot(x,y,gradientAt(x,y,busy));
 
-  /* ---- 待機巡邏（不壓暗、慢慢走） ---- */
+  /* ---- 待機巡邏（帶劍慢走、不壓暗） ---- */
   if(!busy){
     if(patrol){
       patrol.x+=0.45*patrol.dir; patrol.t++;
       const walk=patrol.t%20<10;
       const spr=patrol.dir>0?(walk?SPR_A:SPR_B):(walk?SPR_A_L:SPR_B_L);
       drawSprite(spr,Math.round(patrol.x),ROWS-SH,SCALE);
-      if(patrol.x>COLS+4||patrol.x<-14-4){ patrol=null; schedulePatrol();
+      drawCells(SWORD_READY,Math.round(patrol.x),ROWS-SH,SCALE,patrol.dir);
+      if(patrol.x>COLS+4||patrol.x<-14-6){ patrol=null; schedulePatrol();
         log('idle：紅→黃 像素漸變跑動中'); }
     }else if(frame>=patrolNext){
       spawnPatrol(); log('小勇者巡邏中…');
     }
   }else{ patrol=null; }
 
-  /* ---- 續碗勇者隊伍 ---- */
+  /* ---- 續碗勇者：跑 → 舉劍破石 → 碎石＋恭喜 → 繼續跑 ---- */
   for(const r of runners){
+    const hx=Math.round(r.x), hy=ROWS-SH;
     if(r.state==='run'){
       r.x+=0.9; r.t++;
-      /* 彩蛋在前方等著 */
-      if(r.egg) drawSprite(EGG,r.eggX,ROWS-7*SCALE,SCALE,EGGC);
-      /* 戳到彩蛋 → 嘣 */
-      if(r.egg && r.x+12>=r.eggX){ r.state='burst'; r.burstT=0;
-        log('★ 彩蛋！おかわり おめでとう！'); }
-      drawSprite(r.t%16<8?SPR_A:SPR_B,Math.round(r.x),ROWS-SH,SCALE);
-    }else{ /* burst */
-      r.burstT++;
-      const bx=r.eggX+6, by=ROWS-Math.round(3.5*SCALE);
-      /* 勇者停在彩蛋旁 */
-      drawSprite(r.burstT%10<5?SPR_A:SPR_B,Math.round(r.x),ROWS-SH,SCALE);
-      /* 三圈擴散星芒 */
-      const ph=r.burstT%18;
+      /* 石頭在前方（未破） */
+      if(r.stoneX>=0) drawSprite(STONE,r.stoneX,ROWS-STONE_H,SCALE,STC);
+      drawSprite(r.t%16<8?SPR_A:SPR_B,hx,hy,SCALE);
+      drawCells(SWORD_READY,hx,hy,SCALE,1);
+      /* 劍尖碰到石頭 → 開始劈 */
+      if(r.stoneX>=0 && r.x+17*SCALE>=r.stoneX){ r.state='strike'; r.aT=0; }
+    }
+    else if(r.state==='strike'){
+      r.aT++;
+      drawSprite(STONE,r.stoneX,ROWS-STONE_H,SCALE,STC);
+      drawSprite(SPR_A,hx,hy,SCALE);
+      /* 舉劍/劈下 交替兩次 */
+      const slash=(r.aT%14)>=7;
+      drawCells(slash?SWORD_SLASH:SWORD_READY,hx,hy,SCALE,1);
+      /* 劈下時石頭上冒火花 */
+      if(slash) drawBurst(r.stoneX+8,ROWS-STONE_H+2,3,[255,253,246]);
+      if(r.aT>=28){
+        r.state='burst'; r.aT=0;
+        /* 生成碎石粒子 */
+        r.debris=[];
+        for(let i=0;i<12;i++){
+          r.debris.push({x:r.stoneX+8,y:ROWS-6,
+            vx:-1.0+Math.random()*2.4, vy:-2.2+Math.random()*1.2});
+        }
+        log('★ 破石！おかわり おめでとう！');
+      }
+    }
+    else{ /* burst：碎石飛散＋星芒＋字幕 */
+      r.aT++;
+      const bx=r.stoneX+8, by=ROWS-8;
+      drawSprite(SPR_A,hx,hy,SCALE);
+      drawCells(SWORD_SLASH,hx,hy,SCALE,1);
+      /* 星芒兩圈 */
+      const ph=r.aT%18;
       drawBurst(bx,by,2+ph*0.9,YEL);
       if(ph>4) drawBurst(bx,by,ph*0.7,[255,253,246]);
+      /* 碎石粒子（拋物線） */
+      for(const d of r.debris){
+        d.x+=d.vx; d.y+=d.vy; d.vy+=0.09;
+        const X=Math.round(d.x),Y=Math.round(d.y);
+        if(X>=0&&X<COLS&&Y>=0&&Y<ROWS) dot(X,Y,STC.S);
+      }
       /* 日文字幕閃爍 */
-      if(r.burstT%14<10)
+      if(r.aT%14<10)
         drawText(TXT_EGG,Math.round((COLS-TXT_EGG[0].length)/2),2,YEL);
-      if(r.burstT>84){ r.state='run'; r.egg=false; }  /* 慶祝完繼續跑 */
+      if(r.aT>84){ r.state='run'; r.stoneX=-999; }  /* 石頭已破，繼續跑 */
     }
   }
-  /* 跑出畫面的移除 */
   runners=runners.filter(r=>r.x<=COLS+4);
-  if(!busy && runners.length===0 && !patrol && frame%600===0) {}
 
   /* 整點自動觸發巡邏 */
   const h=new Date().getHours();
