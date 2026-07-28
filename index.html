@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>OKAWARI 門頭屏模擬器 v0.3</title>
+<title>OKAWARI 門頭屏模擬器 v0.4</title>
 <style>
   *{box-sizing:border-box}
   body{background:#0d0b12;color:#d8d3e0;font-family:"Microsoft JhengHei",sans-serif;
@@ -32,7 +32,7 @@
 </style>
 </head>
 <body>
-<h1><b>OKAWARI QUEST</b>｜門頭屏模擬器 v0.3</h1>
+<h1><b>OKAWARI QUEST</b>｜門頭屏模擬器 v0.4</h1>
 <div id="meta"></div>
 <div id="frame"><canvas id="led"></canvas></div>
 <div id="ui">
@@ -43,6 +43,12 @@
     <option value="3" selected>P3（3m 觀看）</option>
     <option value="4">P4（4m 觀看）</option>
     <option value="5">P5（美食街走道距離）</option>
+  </select>
+  <select id="stoneRate" onchange="CONFIG.stoneChance=parseFloat(this.value)">
+    <option value="0.1">破石機率 10%</option>
+    <option value="0.25" selected>破石機率 25%（預設）</option>
+    <option value="0.5">破石機率 50%</option>
+    <option value="1">破石機率 100%（展示用）</option>
   </select>
 </div>
 <div id="log">idle：紅→黃 像素漸變跑動中；續碗請按「＋」，點幾碗按幾次</div>
@@ -55,6 +61,7 @@ const cv=document.getElementById('led'), ctx=cv.getContext('2d');
 
 /* ===== 可調參數 ===== */
 const CONFIG={
+  stoneChance: 0.25, // 續碗破石中獎機率（0~1，之後開放業主後台設定）
   patrolMinSec: 18,  // 待機巡邏最短間隔（秒）
   patrolMaxSec: 40   // 待機巡邏最長間隔（秒）
 };
@@ -136,13 +143,14 @@ function log(m){ document.getElementById('log').textContent=m; }
 
 /* ================= 事件 ================= */
 function okawari(){
-  /* 每一次續碗都有一顆石頭等著被破 */
+  /* 擲骰中獎才會有石頭出現（機率業主可調） */
+  const hit=Math.random()<CONFIG.stoneChance;
   let startX=-16;
   if(runners.length){
     const last=runners[runners.length-1];
     startX=Math.min(-16,last.x-22);
   }
-  const stoneX=Math.round(COLS*(0.38+Math.random()*0.3));
+  const stoneX=hit?Math.round(COLS*(0.38+Math.random()*0.3)):-999;
   runners.push({x:startX,t:0,stoneX,state:'run',aT:0,debris:null});
   log(`OKAWARI +1 ── 勇者出發！（隊伍 ${runners.length} 隻）`);
 }
